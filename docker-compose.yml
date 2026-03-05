@@ -1,0 +1,66 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-sensor_platform}
+      POSTGRES_USER: ${POSTGRES_USER:-sensor}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sensor}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./storage/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sensor} -d ${POSTGRES_DB:-sensor_platform}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  mosquitto:
+    image: eclipse-mosquitto:2
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./message_bus/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+
+  cloud_api:
+    build:
+      context: ./cloud_pipeline/api
+    env_file:
+      - .env.example
+    environment:
+      POSTGRES_HOST: postgres
+      MQTT_HOST: mosquitto
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mosquitto:
+        condition: service_started
+    ports:
+      - "8000:8000"
+
+  alert_worker:
+    build:
+      context: ./event_detection/worker
+    env_file:
+      - .env.example
+    environment:
+      POSTGRES_HOST: postgres
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  edge_simulator:
+    build:
+      context: ./edge_processing/simulator
+    env_file:
+      - .env.example
+    environment:
+      MQTT_HOST: mosquitto
+      SIM_NODE_COUNT: ${SIM_NODE_COUNT:-5}
+      SIM_PUBLISH_INTERVAL_SECONDS: ${SIM_PUBLISH_INTERVAL_SECONDS:-1}
+    depends_on:
+      - mosquitto
+
+volumes:
+  pgdata:
